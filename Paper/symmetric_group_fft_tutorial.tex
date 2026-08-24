@@ -1,0 +1,1228 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\geometry{margin=27mm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black,
+  pdftitle={How a Permutation FFT Tames the Gluon Colour Sum},
+  pdfauthor={MultipletRecursion tutorial note}
+}
+
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2em}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cC}{\mathcal{C}}
+\newcommand{\cM}{\mathcal{M}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newenvironment{takeaway}
+  {\par\medskip\noindent\begin{minipage}{\linewidth}
+   \color{blue!50!black}\textbf{Takeaway.}\ \color{black}}
+  {\end{minipage}\par\medskip}
+
+\title{How a Permutation FFT Tames the Gluon Colour Sum\\
+\large A beginner's guide to the trace and adjoint implementations}
+\author{A tutorial note for the \textsc{AmpliGluon} codes}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Full-colour gluon calculations written in a trace or Del Duca--Dixon--Maltoni
+(DDM) basis contain a dense colour Gram matrix.  If there are $P$ colour
+orders, storing this matrix and applying it directly both appear to require
+order $P^2$ resources.  The implementations in \textsc{AmpliGluonTrace} and
+\textsc{AmpliGluonAdjoint} avoid that dense calculation by noticing that a
+Gram entry depends only on the \emph{relative permutation} between two
+orders.  The matrix is therefore a convolution on a symmetric group.  A
+non-abelian fast Fourier transform reorganizes that convolution into
+independent blocks labelled by Young diagrams.
+
+This note develops the idea from scratch.  It explains what is transformed,
+why the Fourier coefficients are matrices, how the colour contraction is
+recovered exactly, how the recursive transform is made fast, and how the
+trace and adjoint codes differ.  Two examples can be checked by hand.  We
+also separate the precise result---linear colour \emph{storage} and
+subquadratic structured contraction---from the useful but imprecise slogan
+that the cost changes from ``factorial squared'' to ``about factorial.''
+\end{abstract}
+
+\tableofcontents
+
+\section{Executive answer}
+
+The short answer is yes: the symmetric-group FFT is the important device
+that prevents the trace and adjoint codes from constructing and multiplying
+the full dense matrix in
+\begin{equation}
+  Q = \cA^\dagger G\cA.
+  \label{eq:headline}
+\end{equation}
+However, there are two logically separate ingredients:
+
+\begin{enumerate}
+  \item \textbf{Relative-permutation symmetry} shows that all $P^2$
+        entries of $G$ are determined by only $P$ numbers.
+  \item \textbf{The symmetric-group FFT} reorganizes the multiplication by
+        $G$ into independent, much smaller representation blocks.
+\end{enumerate}
+
+The FFT does not reduce the number of partial amplitudes, and it does not
+usually diagonalize the matrices inside each representation block.  It
+replaces one arbitrary-looking $P$-by-$P$ problem by a collection of
+structured block problems.  The result is exact; no colour approximation is
+made.
+
+It is best to measure the scaling in terms of $P$, the number of colour
+orders, rather than writing $n!$ loosely.  For $n$ total gluons,
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  implementation & permutation group & number of orders $P$ \\
+  \midrule
+  trace & $S_{n-1}$ & $(n-1)!$ \\
+  adjoint/DDM & $S_{n-2}$ & $(n-2)!$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+Thus the adjoint calculation starts with exactly a factor $n-1$ fewer orders
+than the trace calculation at the same multiplicity.
+
+\begin{takeaway}
+The dense $P^2$ colour matrix disappears.  What remains is a length-$P$
+kernel, a fast transform of a length-$P$ amplitude vector, and contractions
+inside Young-representation blocks.
+\end{takeaway}
+
+\section{Where the colour matrix comes from}
+
+\subsection{Colour factors and partial amplitudes}
+
+At fixed external momenta and helicities, a full gluon amplitude can be
+written schematically as
+\begin{equation}
+  \cM = \sum_{g} \cC_g\,\cA(g).
+  \label{eq:colour-decomposition}
+\end{equation}
+Here:
+\begin{itemize}
+  \item $g$ labels an ordering of some external gluons;
+  \item $\cC_g$ is a colour tensor for that ordering;
+  \item $\cA(g)$ is the corresponding complex partial amplitude.
+\end{itemize}
+The label $g$ will be treated as an element of a permutation group.  There
+are $P$ possible values of $g$.
+
+To obtain the full-colour squared amplitude, the external colour indices are
+summed.  Inserting Eq.~\eqref{eq:colour-decomposition} gives
+\begin{align}
+  Q
+  &= \sum_{\text{colours}} |\cM|^2 \\
+  &= \sum_{g,h} \cA(g)^*\,
+     \underbrace{\left\langle \cC_g,\cC_h\right\rangle}_{G_{g h}}
+     \cA(h).
+  \label{eq:gram-sum}
+\end{align}
+The matrix
+\begin{equation}
+  G_{g h}=\left\langle\cC_g,\cC_h\right\rangle
+\end{equation}
+is the colour Gram matrix.  It measures how much two colour tensors overlap.
+
+In an orthonormal basis, $G$ would be the identity and the answer would be
+just a sum of absolute squares.  That is what happens in the normalized
+multiplet implementation.  Trace and DDM colour tensors are not orthogonal,
+so their off-diagonal overlaps matter.
+
+\subsection{The naive bottleneck}
+
+For $P$ orderings, a generic Gram matrix contains $P^2$ numbers.  A direct
+evaluation of Eq.~\eqref{eq:gram-sum} also performs order $P^2$ pairwise
+interactions.  This becomes severe because $P$ is already factorial in the
+number of gluons.
+
+For example, the trace code has $P=(n-1)!$.  At eight total gluons this is
+$7!=5040$ orders, so a dense matrix would have more than $25$ million
+entries.  At ten gluons it would have
+$(9!)^2$, more than $10^{11}$ entries.  The problem is not merely a
+constant-factor optimization.
+
+\section{The hidden structure: only the relative permutation matters}
+
+The Gram matrix is not generic.  Relabelling both colour tensors by the same
+permutation cannot change their fully contracted overlap.  In group notation,
+\begin{equation}
+  G_{qg,qh}=G_{g,h}
+  \qquad\text{for every permutation }q.
+  \label{eq:left-invariance}
+\end{equation}
+Choose $q=g^{-1}$.  Then
+\begin{equation}
+  G_{g,h}=G_{e,g^{-1}h}\equiv k(g^{-1}h),
+  \label{eq:relative-kernel}
+\end{equation}
+where $e$ is the identity permutation and $k$ is a function on the group.
+
+This statement has a simple interpretation.  The overlap does not care about
+the absolute names of the two seating plans; it cares only about the
+reshuffling required to turn one seating plan into the other.  Every row of
+the large Gram matrix is therefore a rearranged copy of the same list of
+kernel values.
+
+Equation~\eqref{eq:relative-kernel} immediately reduces the colour data from
+$P^2$ entries to $P$ entries.  It does not yet reduce a naive application
+of the matrix.  Define
+\begin{equation}
+  B(h)=\sum_g \cA(g)\,k(g^{-1}h).
+  \label{eq:convolution}
+\end{equation}
+Then
+\begin{equation}
+  Q=\sum_h \cA(h)^* B(h).
+  \label{eq:q-from-convolution}
+\end{equation}
+Computing Eq.~\eqref{eq:convolution} directly is still a double sum over
+$P^2$ pairs.  The purpose of the FFT is to evaluate this structured
+convolution without treating those pairs independently.
+
+\begin{takeaway}
+The symmetry of the Gram matrix is the reason a fast method can exist.  The
+FFT exploits that symmetry; it does not create it.
+\end{takeaway}
+
+\section{Analogy with the ordinary FFT}
+
+Consider first a list indexed by points on a circle.  A circulant matrix has
+entries that depend only on the relative displacement between two points.
+Ordinary Fourier modes turn a circulant matrix into a diagonal matrix.  A
+convolution then becomes multiplication frequency by frequency.
+
+The present problem has the same architecture, with one difference:
+\begin{itemize}
+  \item positions on a circle form a cyclic group;
+  \item gluon reorderings form a symmetric group $S_m$.
+\end{itemize}
+The cyclic group is abelian: doing two shifts in either order gives the same
+result.  A symmetric group is non-abelian.  For example, if
+$u=(12)$ and $v=(23)$, then
+\begin{equation}
+  uv\ne vu.
+\end{equation}
+Because permutation operations do not commute, their Fourier ``frequencies''
+cannot all be represented by single complex numbers.  Some frequencies must
+be represented by matrices.  Consequently, the permutation FFT generally
+produces a \emph{block-diagonal} problem rather than a completely diagonal
+one.
+
+The analogy can be summarized as follows:
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+   & ordinary FFT & symmetric-group FFT \\
+  \midrule
+  index set & points on a cycle & permutations \\
+  symmetry group & cyclic, abelian & $S_m$, non-abelian \\
+  Fourier sector & one complex number & a small matrix \\
+  structured matrix & circulant & group convolution \\
+  transformed form & diagonal & block diagonal \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+No physical time or frequency is involved.  ``Frequency'' is only an analogy
+for a component with a definite transformation pattern under permutations.
+
+\section{The minimum representation theory we need}
+
+\subsection{Representations and irreducible blocks}
+
+A matrix representation assigns a matrix $\rho(g)$ to every group element
+$g$, while preserving multiplication:
+\begin{equation}
+  \rho(gh)=\rho(g)\rho(h).
+  \label{eq:representation}
+\end{equation}
+A representation is \emph{irreducible} if no change of basis can split all
+its matrices into smaller independent blocks.  Irreducible representations
+are the elementary symmetry sectors of the group.
+
+For the symmetric group $S_m$, irreducible representations are labelled by
+partitions of $m$, usually drawn as Young diagrams.  We denote a partition
+by $\lambda$ and the dimension of its representation by $d_\lambda$.
+The dimensions obey the crucial counting identity
+\begin{equation}
+  \sum_{\lambda\vdash m} d_\lambda^2=m!=|S_m|.
+  \label{eq:sum-of-squares}
+\end{equation}
+Thus a function containing $m!$ scalar values can be reorganized into one
+$d_\lambda$-by-$d_\lambda$ matrix for every Young diagram without losing
+or adding information.
+
+For $S_3$, the partitions and dimensions are
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  partition & informal symmetry & dimension \\
+  \midrule
+  $(3)$ & completely symmetric & $1$ \\
+  $(2,1)$ & mixed symmetry & $2$ \\
+  $(1,1,1)$ & completely antisymmetric & $1$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+Indeed,
+\begin{equation}
+  1^2+2^2+1^2=6=|S_3|.
+\end{equation}
+
+\subsection{The transform used by the code}
+
+The implementation uses the unnormalized forward transform
+\begin{equation}
+  \widehat f_\lambda
+  =\sum_{g\in S_m}f(g)\rho_\lambda(g).
+  \label{eq:forward-transform}
+\end{equation}
+For a one-dimensional representation, $\widehat f_\lambda$ is one complex
+number.  For a representation of dimension $d_\lambda$, it is a
+$d_\lambda$-by-$d_\lambda$ complex matrix.
+
+There are still exactly $P=m!$ scalar Fourier coefficients in total, by
+Eq.~\eqref{eq:sum-of-squares}.  The FFT is therefore not a lossy compression.
+It is a reorganization that exposes which pieces can and cannot interact.
+
+\section{Why convolution becomes block multiplication}
+
+Let $B$ be the colour convolution in Eq.~\eqref{eq:convolution}.  Set
+$x=g^{-1}h$, so that $h=gx$.  Transforming $B$ gives
+\begin{align}
+  \widehat B_\lambda
+  &=\sum_h B(h)\rho_\lambda(h) \\
+  &=\sum_{g,x}\cA(g)k(x)\rho_\lambda(gx) \\
+  &=\left(\sum_g\cA(g)\rho_\lambda(g)\right)
+    \left(\sum_x k(x)\rho_\lambda(x)\right) \\
+  &=\widehat A_\lambda K_\lambda,
+  \label{eq:convolution-theorem}
+\end{align}
+where
+\begin{equation}
+  \widehat A_\lambda=\sum_g\cA(g)\rho_\lambda(g),
+  \qquad
+  K_\lambda=\sum_x k(x)\rho_\lambda(x).
+\end{equation}
+
+This is the non-abelian convolution theorem.  A sum coupling every pair of
+permutations has become one ordinary matrix product in each Young sector.
+Different Young diagrams never mix.
+
+The finite-group version of Parseval's or Plancherel's identity then converts
+Eq.~\eqref{eq:q-from-convolution} into
+\begin{equation}
+  Q=\frac{1}{|S_m|}
+    \sum_{\lambda\vdash m}d_\lambda
+    \Tr\!\left(
+      \widehat A_\lambda^\dagger
+      \widehat A_\lambda K_\lambda
+    \right).
+  \label{eq:block-quadratic-form}
+\end{equation}
+This is the central equation implemented by both colour codes.
+
+The factors in Eq.~\eqref{eq:block-quadratic-form} have straightforward
+roles:
+\begin{itemize}
+  \item $1/|S_m|$ compensates for the unnormalized forward transform;
+  \item $d_\lambda$ is the Plancherel weight of the irrep;
+  \item $\widehat A_\lambda^\dagger\widehat A_\lambda$ contains overlaps
+        between columns of the transformed amplitude block;
+  \item $K_\lambda$ supplies the colour weight for those overlaps.
+\end{itemize}
+
+For the colour kernels in these codes, inversion symmetry of $k$ makes each
+$K_\lambda$ real symmetric, up to floating-point roundoff.  The
+implementation checks this property and stores the symmetrized result.  Its
+contraction evaluates
+\begin{equation}
+  \Tr(\widehat A^\dagger\widehat A K)
+  =\sum_i K_{ii}\|\widehat A_i\|^2
+   +2\sum_{i<j}K_{ij}
+      \operatorname{Re}(\widehat A_i^\dagger\widehat A_j),
+  \label{eq:symmetric-block-contraction}
+\end{equation}
+where $\widehat A_i$ is column $i$ of an amplitude block.  Each
+off-diagonal column overlap is therefore computed only once.
+
+\begin{takeaway}
+The FFT has not thrown away the operation $\cA^\dagger G\cA$.  It evaluates
+the same scalar in a basis where unrelated symmetry sectors are already
+separated.
+\end{takeaway}
+
+\section{Warm-up example: the four-gluon DDM matrix}
+
+At four gluons, the DDM basis contains two orders.  In the normalization used
+by \textsc{AmpliGluonAdjoint}, its Gram matrix is
+\begin{equation}
+  G=\begin{pmatrix}
+       288 & 144\\
+       144 & 288
+     \end{pmatrix}.
+  \label{eq:four-gluon-ddm-gram}
+\end{equation}
+Let the two partial amplitudes be $a$ and $b$.  Direct multiplication gives
+\begin{equation}
+  Q=288\bigl(|a|^2+|b|^2\bigr)
+    +288\operatorname{Re}(a^*b).
+  \label{eq:four-gluon-ddm-direct}
+\end{equation}
+
+The two orders form $S_2$.  Its two one-dimensional Fourier sectors are the
+symmetric and antisymmetric combinations
+\begin{equation}
+  \widehat A_+=a+b,
+  \qquad
+  \widehat A_-=a-b.
+\end{equation}
+Writing $\tau=(12)$ for the nontrivial permutation, the kernel values
+$k(e)=288$ and $k(\tau)=144$ transform to
+\begin{equation}
+  K_+=432,
+  \qquad
+  K_-=144.
+\end{equation}
+Equation~\eqref{eq:block-quadratic-form} becomes
+\begin{equation}
+  Q=\frac{1}{2}
+    \left(432|a+b|^2+144|a-b|^2\right),
+  \label{eq:four-gluon-ddm-fourier}
+\end{equation}
+which expands to Eq.~\eqref{eq:four-gluon-ddm-direct}.
+
+This tiny example is fully diagonal because $S_2$ is abelian and all its
+irreps are one-dimensional.  For larger symmetric groups, mixed-symmetry
+irreps have dimension greater than one and produce matrix blocks.
+
+\section{Worked block example: the four-gluon trace kernel on
+\texorpdfstring{$S_3$}{S3}}
+
+The four-gluon trace code fixes one gluon and permutes the other three, giving
+six orders in $S_3$.  In the code's $U(3)$ loop normalization, the kernel
+is
+\begin{equation}
+  k(e)=81,
+  \qquad
+  k(g)=9\quad\text{for }g\ne e.
+  \label{eq:s3-trace-kernel}
+\end{equation}
+
+Write
+\begin{equation}
+  S_3=\{e,r,r^2,s,sr,sr^2\},
+  \qquad r^3=s^2=e,
+  \qquad srs=r^{-1}.
+\end{equation}
+Besides the trivial and sign representations, $S_3$ has a standard
+two-dimensional representation.  One real choice is
+\begin{equation}
+  \rho_{\mathrm{std}}(r)=
+  \begin{pmatrix}
+    -\tfrac12&-\tfrac{\sqrt3}{2}\\
+     \tfrac{\sqrt3}{2}&-\tfrac12
+  \end{pmatrix},
+  \qquad
+  \rho_{\mathrm{std}}(s)=
+  \begin{pmatrix}1&0\\0&-1\end{pmatrix}.
+\end{equation}
+
+Transforming Eq.~\eqref{eq:s3-trace-kernel} gives three blocks:
+\begin{equation}
+  K_{\mathrm{triv}}=126,
+  \qquad
+  K_{\mathrm{sign}}=72,
+  \qquad
+  K_{\mathrm{std}}=72I_2.
+  \label{eq:s3-kernel-blocks}
+\end{equation}
+The information count is $1+1+4=6$, exactly the number of original kernel
+values.
+
+For a transparent numerical check, suppose only two amplitude values are
+nonzero:
+\begin{equation}
+  \cA(e)=a,
+  \qquad
+  \cA(s)=b.
+\end{equation}
+Their Fourier blocks are
+\begin{align}
+  \widehat A_{\mathrm{triv}}&=a+b,\\
+  \widehat A_{\mathrm{sign}}&=a-b,\\
+  \widehat A_{\mathrm{std}}
+    &=aI_2+b\rho_{\mathrm{std}}(s)
+      =\begin{pmatrix}a+b&0\\0&a-b\end{pmatrix}.
+\end{align}
+The block formula gives
+\begin{align}
+  Q=\frac{1}{6}\Bigl[&126|a+b|^2+72|a-b|^2 \\
+      &+2(72)\bigl(|a+b|^2+|a-b|^2\bigr)\Bigr] \\
+   &=81\bigl(|a|^2+|b|^2\bigr)
+     +18\operatorname{Re}(a^*b).
+  \label{eq:s3-block-answer}
+\end{align}
+The direct two-entry calculation uses $G_{ee}=G_{ss}=81$ and
+$G_{es}=G_{se}=9$, and gives the same result.  For $a=b=1$, both methods
+give $Q=180$.
+
+This four-gluon kernel is unusually simple: its two-dimensional block happens
+to be proportional to the identity.  At higher multiplicity, the code allows
+and contracts full real symmetric matrices inside the Young blocks.  The
+general claim is block diagonalization, not complete diagonalization.
+
+\section{Why this is a \emph{fast} group Fourier transform}
+
+Equation~\eqref{eq:forward-transform} defines a Fourier transform, but using
+that definition literally would not be fast.  One would construct many dense
+matrices $\rho_\lambda(g)$ and sum over every permutation separately.  The
+implementation instead reuses work along the subgroup tower
+\begin{equation}
+  S_1\subset S_2\subset\cdots\subset S_m.
+  \label{eq:subgroup-tower}
+\end{equation}
+
+\subsection{Recursive permutation order}
+
+Let $s_i=(i,i+1)$ be an adjacent swap.  The code organizes $S_m$ into
+$m$ cosets of $S_{m-1}$:
+\begin{equation}
+  S_m=\bigsqcup_{i=1}^{m}
+      (s_i s_{i+1}\cdots s_{m-1})S_{m-1},
+  \label{eq:coset-decomposition}
+\end{equation}
+where the product is empty when $i=m$.  In elementary terms, first choose
+which label occupies the final image position, and then permute the remaining
+$m-1$ labels.  This produces $m$ copies of the same $S_{m-1}$ problem.
+
+The input amplitudes arrive in lexicographic permutation order.  A one-time
+index map rearranges them into the recursive order of
+Eq.~\eqref{eq:coset-decomposition}.  The transform can then reuse the already
+computed $S_{m-1}$ transforms for every coset.
+
+\subsection{Young branching}
+
+When an irrep of $S_m$ is restricted to $S_{m-1}$, it splits according to
+the removable corners of its Young diagram.  In the standard Young-tableau
+basis, these child representations occupy diagonal subblocks.  The code can
+therefore copy each transformed $S_{m-1}$ child directly into the
+appropriate part of its $S_m$ parent block.
+
+No representation-theory expertise is needed to understand the computational
+point: the chosen basis makes the recursive subproblem visibly block
+diagonal, so results from the previous level can be reused rather than
+recomputed.
+
+\subsection{Sparse adjacent swaps}
+
+The remaining coset representative is a product of adjacent swaps.  In
+Young's orthogonal representation, an adjacent swap either
+\begin{itemize}
+  \item multiplies one tableau state by a sign, or
+  \item mixes a pair of tableau states through a $2$-by-$2$ orthogonal block.
+\end{itemize}
+If the axial distance for the first tableau is $a$, the two-state block can
+be written as
+\begin{equation}
+  \begin{pmatrix}
+    \dfrac{1}{a} & \sqrt{1-\dfrac{1}{a^2}} \\
+    \sqrt{1-\dfrac{1}{a^2}} & -\dfrac{1}{a}
+  \end{pmatrix}.
+\end{equation}
+This matrix is a reflection: it is symmetric and its square is the identity.
+The implementation stores, for each state and generator, only its partner,
+the diagonal coefficient, and the mixing coefficient.  It never needs a
+general dense generator matrix.
+
+Combining recursive reuse, Young branching, and sparse adjacent swaps is what
+makes the transform an FFT rather than a direct group Fourier transform.
+
+\section{How \textsc{AmpliGluonTrace} uses the FFT}
+
+\subsection{The ordering space}
+
+For $n$ total gluons, the trace code fixes the final gluon and retains all
+orders of the first $n-1$.  Its amplitude vector is therefore a function on
+$S_{n-1}$, with
+\begin{equation}
+  P_{\mathrm{trace}}=(n-1)!.
+\end{equation}
+These trace tensors are non-orthogonal, so a colour Gram contraction is
+required.
+
+\subsection{The trace kernel}
+
+The kernel is most easily constructed using fundamental colour lines.  Embed
+$h\in S_{n-1}$ into $S_n$ by making it fix $n$, define the long cycle
+$\gamma=(1\,2\,\ldots\,n)$, and let $\nu(\pi)$ count the cycles of a
+permutation $\pi$.  The implemented $U(3)$ kernel is
+\begin{equation}
+  k_{\mathrm{trace}}(h)
+  =3^{\nu(\gamma^{-1}h\gamma h^{-1})}.
+  \label{eq:trace-loop-kernel}
+\end{equation}
+Every closed fundamental-index loop supplies one factor of three.  For a
+pure-gluon tree amplitude, the $U(1)$ component decouples, so this $U(3)$
+construction yields the same contracted result as the required $SU(3)$
+colour sum.
+
+\subsection{One-time and per-event work}
+
+For a fixed multiplicity, the colour object performs the following setup:
+\begin{enumerate}
+  \item build the $P_{\mathrm{trace}}$ kernel values;
+  \item initialize the $S_{n-1}$ Fourier plan and reusable workspace;
+  \item transform the kernel into the blocks $K_\lambda$;
+  \item verify that every transformed kernel block is real symmetric.
+\end{enumerate}
+For each nonzero amplitude evaluation, it then:
+\begin{enumerate}
+  \item fills all ordered partial amplitudes $\cA(g)$;
+  \item transforms them into $\widehat A_\lambda$;
+  \item evaluates Eq.~\eqref{eq:block-quadratic-form} block by block.
+\end{enumerate}
+The transformed kernel is reused.  Only the amplitudes depend on the current
+phase-space point and helicity assignment.
+
+\section{How \textsc{AmpliGluonAdjoint} uses the FFT}
+
+\subsection{The smaller DDM ordering space}
+
+The DDM decomposition fixes two gluons at the ends of a chain and permutes
+the $n-2$ gluons between them:
+\begin{equation}
+  \cM=\sum_{\sigma\in S_{n-2}}
+      \cC_\sigma\,\cA(1,\sigma,n).
+\end{equation}
+Consequently,
+\begin{equation}
+  P_{\mathrm{DDM}}=(n-2)!.
+\end{equation}
+The DDM basis is smaller than the full trace ordering set, but it is still
+non-orthogonal.  Its Gram entries again depend only on the relative DDM
+permutation, so the colour matrix is a convolution on $S_{n-2}$.
+
+\subsection{Building the adjoint kernel without expanding every chain}
+
+A DDM colour factor is a chain of adjoint structure constants.  In the
+fundamental representation, that chain is a nested commutator.  Every
+commutator
+\begin{equation}
+  [X,Y]=XY-YX
+\end{equation}
+is a finite difference between two trace orderings.  Expanding all nested
+commutators in both colour factors independently would generate a large
+number of trace terms.
+
+The adjoint code instead starts with the trace kernel and applies the
+commutators as repeated finite-difference sweeps over the permutation array.
+The left and right DDM chains require $2(n-2)$ such sweeps over the
+$S_{n-1}$ trace kernel.  The final restricted array contains the
+$(n-2)!$ values of the DDM kernel.  This factorization avoids separately
+forming all trace pairings for every DDM Gram entry.
+
+The use of the $U(3)$ trace kernel is exact here as well: the identity
+generator commutes with everything, so every $U(1)$ contribution vanishes
+inside the commutator chain.
+
+\subsection{The transform and contraction are shared}
+
+After constructing its kernel, the adjoint code uses the same
+\code{symmetric\_group\_fft} implementation and the same block formula as the
+trace code, now at degree $n-2$.  In particular:
+\begin{itemize}
+  \item the kernel is transformed once and stored as real symmetric blocks;
+  \item each DDM amplitude vector is transformed on evaluation;
+  \item the result is accumulated using Eq.~\eqref{eq:symmetric-block-contraction}.
+\end{itemize}
+The two codes therefore differ in their amplitude bases, group degrees, and
+kernel construction, but not in the Fourier mathematics used after the
+kernel is available.
+
+\section{What scaling is actually improved?}
+
+This is where precise language matters.  Let $P=|S_m|=m!$ denote the number
+of orders in whichever code is being discussed.
+
+\subsection{Storage}
+
+The storage improvement is clean:
+\begin{center}
+\begin{tabular}{ll}
+  \toprule
+  object & number of stored scalars \\
+  \midrule
+  dense Gram matrix & $P^2$ \\
+  relative-permutation kernel & $P$ \\
+  all Fourier kernel blocks &
+     $\sum_\lambda d_\lambda^2=P$ \\
+  transformed amplitude blocks &
+     $\sum_\lambda d_\lambda^2=P$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+Thus the colour-matrix storage is reduced from quadratic to linear in the
+number of orders.
+
+\subsection{Arithmetic}
+
+A direct dense quadratic form takes order $P^2$ pair operations.  The
+Fourier route replaces it by
+\begin{enumerate}
+  \item one fast group transform of the amplitude vector;
+  \item one contraction for each Young block.
+\end{enumerate}
+The recursive FFT is designed to cost roughly a factorial-sized traversal
+times multiplicity-dependent polynomial overhead, rather than a direct
+all-permutations-by-all-Fourier-coefficients calculation.
+
+For a block of dimension $d_\lambda$, the implemented column-overlap
+contraction takes order $d_\lambda^3$ arithmetic operations.  The total
+block work is therefore characterized by
+\begin{equation}
+  \sum_\lambda d_\lambda^3.
+  \label{eq:block-cost}
+\end{equation}
+For every nontrivial case, this is bounded well below the $P^2$ pairwise cost
+of the original dense quadratic form.  A simple, deliberately loose bound is
+\begin{equation}
+  \sum_\lambda d_\lambda^3
+  \leq
+  \left(\max_\lambda d_\lambda\right)
+  \sum_\lambda d_\lambda^2
+  \leq P^{3/2}.
+  \label{eq:block-bound}
+\end{equation}
+The real-symmetric kernel lets the implementation evaluate each off-diagonal
+column overlap once instead of twice.  The implementation also tiles several
+overlaps together, improving constants but not changing this characterization.
+
+Consequently, the safest statement is:
+\begin{quote}
+The algorithm removes the $P^2$ dense colour-matrix bottleneck.  It replaces
+it with $P$-sized colour data, a fast permutation transform, and independent
+subquadratic block contractions.
+\end{quote}
+Calling this ``about $P$,'' and hence ``about factorial,'' is a useful
+high-level summary of the storage and transform structure.  It is not a proof
+that the complete runtime is exactly $\Theta(P)$.
+
+\subsection{The whole amplitude remains factorial}
+
+Neither FFT reduces the number of partial amplitudes:
+\begin{equation}
+  P_{\mathrm{trace}}=(n-1)!,
+  \qquad
+  P_{\mathrm{DDM}}=(n-2)!.
+\end{equation}
+Those amplitudes must still be generated, although the codes share
+Berends--Giele subcurrents and use special MHV evaluators to reduce their
+kinematic cost.  The colour FFT addresses the colour contraction stage, not
+the entire factorial growth of an ordered-amplitude formulation.
+
+Kernel construction is also separate from per-event contraction.  It is done
+once per multiplicity and can be amortized over many phase-space points and
+helicity configurations.
+
+\begin{takeaway}
+``Factorial squared to about factorial'' correctly identifies the bottleneck
+that disappears, provided it is not read as a strict asymptotic theorem for
+the entire program.
+\end{takeaway}
+
+\section{How established is this method?}
+
+The answer depends on which part of the method one has in mind.  It is useful
+to distinguish three layers:
+\begin{enumerate}
+  \item The theorem that a group convolution becomes block multiplication
+        after a finite-group Fourier transform is classical.
+  \item Fast algorithms specialized to the symmetric group are an established
+        subject in computational representation theory, but they are much less
+        widely known than the ordinary FFT.
+  \item Applying such a fast numerical transform to a trace- or DDM-basis
+        colour Gram contraction appears to be uncommon in collider QCD.
+\end{enumerate}
+Thus the mathematical identity is not new.  What is unusual here is the way
+in which it is used to remove a concrete collider-calculation bottleneck.
+
+\subsection{Classical mathematics versus an actual FFT}
+
+For a finite group, a matrix of the form
+\begin{equation}
+  G_{\sigma,\tau}=k(\sigma^{-1}\tau)
+\end{equation}
+is a group-convolution operator.  Decomposing the group algebra into its
+irreducible matrix blocks is the finite-group analogue of diagonalizing a
+circulant matrix with an ordinary Fourier transform.  For a non-abelian group
+such as $S_m$, the result is generally block diagonal rather than scalar
+diagonal.  Only a central kernel, also called a class function, is guaranteed
+to act as a scalar within every irreducible block.
+
+There is an important algorithmic distinction.  Equation
+\eqref{eq:forward-transform} defines Fourier coefficients by summing over all
+$m!$ permutations.  Evaluating that definition independently for every
+coefficient is still an order-$(m!)^2$ calculation.  A genuine FFT exploits
+the subgroup tower in Eq.~\eqref{eq:subgroup-tower}, Young branching, and
+sparse adjacent-transposition matrices to reuse intermediate results.
+
+Fast transforms of this kind were developed by Clausen and by Diaconis and
+Rockmore, with subsequent refinements and implementations by Clausen and Baum
+and by Maslen~\cite{clausen1989,diaconisrockmore1990,clausenbaum1993,maslen1998}.
+Maslen gives an explicit bound of at most
+\begin{equation}
+  \frac{3}{4}m(m-1)|S_m|
+\end{equation}
+multiplications, and the same number of additions, for his symmetric-group
+transform.  The appropriate summary is therefore ``linear in the group order
+up to a polynomial in $m$,'' rather than literally $O(m!)$ with a
+multiplicity-independent constant.  This is the established algorithmic
+precedent for the FFT used in this repository.
+
+Merely labelling the rows and columns of an arbitrary matrix by permutations
+does not create this speedup.  The relative-permutation identity above, or a
+closely related subgroup or coset symmetry, is the essential hypothesis.
+
+\subsection{Use in formal high-energy theory}
+
+Symmetric-group Fourier ideas are well established in formal high-energy
+theory.  Multi-trace operators containing many matrix fields are naturally
+described by permutations.  Passing from a permutation basis to a basis
+labelled by symmetric-group representations leads to Schur and restricted
+Schur operators, organizes finite-$N_c$ relations, and often diagonalizes
+free two-point functions.  Early and representative examples include the
+work of Corley, Jevicki, and Ramgoolam and of Brown, Heslop, and
+Ramgoolam~\cite{Corley:2001zk,Brown:2007xh}.  Broader treatments describe the
+Fourier transformation of permutation algebras in gauge-invariant operator
+bases, quiver gauge theories, and tensor models
+~\cite{Ramgoolam:2016ciq,Mattioli:2016gyl,BenGeloun:2017vwn}.
+
+These applications use the same underlying representation-theory
+decomposition, but usually for a different purpose.  They use the Fourier
+basis analytically to classify operators or diagonalize correlators.  They do
+not generally claim to run a recursive Clausen--Maslen FFT in order to speed
+up repeated numerical convolutions.  The words ``Fourier transform'' in a
+formal field-theory paper therefore do not by themselves imply the fast
+algorithm described by Eq.~\eqref{eq:subgroup-tower}.
+
+\subsection{Status in collider QCD}
+
+Collider calculations certainly use permutation-labelled trace and DDM
+bases, but their common computational strategies are different.  Examples
+include colour-flow decompositions, colour-dressed recursion, and orthogonal
+$SU(N_c)$ multiplet bases~\cite{Maltoni:2002mq,Duhr:2006iq,Keppeler:2012ih}.  The
+\textsc{ColorFull} library is an example of direct trace-basis colour
+algebra~\cite{Sjodahl:2014opa}.
+
+To our knowledge, a fast numerical $S_m$ transform has not become a standard
+method for collider colour sums.  In particular, we are not aware of an
+earlier collider implementation that identifies the trace or DDM Gram matrix
+as a relative-permutation convolution and then uses a recursive
+symmetric-group FFT to avoid the dense $\cA^\dagger G\cA$ contraction.  This
+is deliberately a cautious statement about the literature, not a categorical
+claim of priority.
+
+The most accurate characterization is therefore:
+\begin{quote}
+The finite-group convolution theorem and fast symmetric-group transforms are
+classical.  Their use as analytic representation bases is established in
+formal gauge theory and tensor models.  Their use as a numerical accelerator
+for collider-QCD colour Gram contractions is apparently uncommon.
+\end{quote}
+
+\subsection{Where symmetric-group Fourier analysis is used most}
+
+The most developed practical literature concerns data whose states are
+themselves permutations.  Diaconis used symmetric-group harmonic analysis
+for ranked data~\cite{diaconis1989}.  Later work applied fast transforms to
+probability distributions over assignments, multi-object tracking, and
+clustering of rankings~\cite{kondor2007,plumb2015}.  There is also a quantum
+algorithm for the Fourier transform over symmetric groups~\cite{beals1997}.
+These fields treat the transform as a specialized tool rather than a
+universal primitive comparable in popularity to the ordinary FFT.
+
+A closely related physics application is the Fourier analysis of
+many-particle transition amplitudes for partially distinguishable bosons and
+fermions~\cite{Dufour:2024nmz}.  There too, permutations label the different ways
+particles can be assigned between input and output states.  This resembles
+the ordering structure of the colour problem, but it is not a QCD colour
+calculation.
+
+\subsection{Does the application require all-gluon scattering?}
+
+No general theorem requires gluons.  The transform applies whenever the
+large matrix really is a group convolution.  All-gluon trace and DDM bases
+are especially clean because the relevant orderings furnish a full symmetric
+group, and simultaneous relabelling makes the Gram entry depend only on the
+relative permutation.
+
+With quarks or several distinguishable particle species, fixed endpoints and
+species labels can reduce the symmetry.  The remaining structure may be a
+convolution on a subgroup, a function on a coset space, or a collection of
+smaller convolution problems.  Fourier methods can still apply, but the
+present $S_m$ implementation may need to be adapted.  Conversely, an
+arbitrary matrix whose indices merely happen to be permutations receives no
+benefit unless its entries possess the required relative-permutation
+invariance.
+
+\section{Comparison with the multiplet basis}
+
+The three colour strategies in this repository solve related but different
+linear-algebra problems:
+\begin{center}
+\small
+\begin{tabular}{@{}
+  >{\raggedright\arraybackslash}p{0.18\linewidth}
+  >{\raggedright\arraybackslash}p{0.21\linewidth}
+  >{\raggedright\arraybackslash}p{0.22\linewidth}
+  >{\raggedright\arraybackslash}p{0.30\linewidth}@{}}
+  \toprule
+  implementation & basis & Gram matrix & final colour operation \\
+  \midrule
+  multiplet & normalized multiplet paths & identity & Euclidean norm \\
+  trace & single traces & non-diagonal convolution & FFT plus Young-block contraction \\
+  adjoint & DDM chains & non-diagonal convolution & FFT plus Young-block contraction \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The permutation FFT does not secretly turn the trace or DDM tensors into the
+multiplet basis.  It decomposes the \emph{space of ordering functions} into
+irreducible sectors of a symmetric group.  Within a sector, colour components
+can still mix.  The multiplet implementation instead starts from colour
+tensors whose Gram matrix is already the identity.
+
+\section{Algorithm summary}
+
+The common logic can be written as the following pseudocode.
+
+\subsection*{Setup for one gluon multiplicity}
+
+\begin{enumerate}
+  \item Choose $m=n-1$ for trace or $m=n-2$ for DDM.
+  \item Build the $P=m!$ relative-permutation kernel values $k(g)$.
+  \item Enumerate Young diagrams and standard tableaux for every
+        $S_1,\ldots,S_m$.
+  \item Build sparse adjacent-swap representations and the recursive coset
+        ordering.
+  \item Compute $K_\lambda=\operatorname{FFT}_{S_m}[k]_\lambda$.
+  \item Check that every $K_\lambda$ is finite, real, and symmetric.
+\end{enumerate}
+
+\subsection*{For each nonzero amplitude vector}
+
+\begin{enumerate}
+  \item Compute all required partial amplitudes $\cA(g)$.
+  \item Compute
+        $\widehat A_\lambda=\operatorname{FFT}_{S_m}[\cA]_\lambda$.
+  \item For every Young diagram, accumulate
+        $d_\lambda\Tr(
+          \widehat A_\lambda^\dagger
+          \widehat A_\lambda K_\lambda)$.
+  \item Divide the sum by $m!$.
+  \item Apply any separately requested initial-colour average.
+\end{enumerate}
+
+Exact-zero helicity sectors and zero coupling can return before the transform,
+which is an independent optimization.
+
+\section{Common misconceptions}
+
+\paragraph{``The FFT makes the original basis orthogonal.''}
+No.  Trace and DDM colour tensors remain non-orthogonal.  The transform makes
+their convolution structure block diagonal in permutation-representation
+space.
+
+\paragraph{``Every Fourier block is diagonal.''}
+No.  That is true for abelian groups and happens accidentally in some small
+examples.  General $S_m$ irreps are multidimensional, and their kernel
+blocks are matrices.
+
+\paragraph{``The FFT reduces the number of partial amplitudes.''}
+No.  It transforms all $P$ amplitudes into exactly $P$ scalar Fourier
+coefficients arranged in blocks.
+
+\paragraph{``This is an approximation to full colour.''}
+No.  For the physical pure-gluon amplitudes in the scope of these codes, the
+convolution theorem, the $U(1)$ decoupling used by the trace kernel, and the
+Plancherel identity are exact.  Differences from a direct dense contraction
+are only floating-point roundoff.
+
+\paragraph{``Young diagrams describe gluon species.''}
+No.  They label transformation patterns under permutations of ordering
+positions.  They are bookkeeping devices for permutation symmetry.
+
+\paragraph{``The adjoint commutators and the non-abelian FFT are the same
+noncommutativity.''}
+No.  The commutators construct DDM colour factors in the fundamental colour
+algebra.  The matrix-valued FFT arises because permutations themselves do not
+commute.  These are separate structures that happen to meet in the same
+calculation.
+
+\paragraph{``The runtime is now proven to be exactly factorial.''}
+No.  The stored colour data are linear in $P$, and the dense $P^2$
+bottleneck is gone.  Transform overhead, Young-block dimensions, and the cost
+of producing the partial amplitudes remain.
+
+\section{Map from the explanation to the source code}
+
+The relevant implementation is compactly divided by responsibility:
+\begin{center}
+\small
+\begin{tabular}{@{}
+  >{\raggedright\arraybackslash}p{0.43\linewidth}
+  >{\raggedright\arraybackslash}p{0.52\linewidth}@{}}
+  \toprule
+  source file & role \\
+  \midrule
+  \path{AmpliGluonTrace/src/symmetric_group_fft.f90}
+    & Young diagrams and tableaux, adjacent generators, subgroup recursion,
+      forward transform, and reusable workspace \\
+  \path{AmpliGluonTrace/src/trace_colour_kernel.f90}
+    & cycle-count construction of the $U(3)$ trace kernel \\
+  \path{AmpliGluonTrace/src/trace_colour_matrix.f90}
+    & kernel transform, amplitude transform, and blockwise Plancherel
+      contraction for trace orders \\
+  \path{AmpliGluonAdjoint/src/adjoint_colour_matrix.f90}
+    & finite-difference construction of the DDM kernel and its blockwise
+      contraction \\
+  \path{AmpliGluonAdjoint/Makefile}
+    & compiles the same shared FFT and trace-kernel sources into the adjoint
+      library \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Useful regression tests are found in
+\path{AmpliGluonTrace/tests/test_symmetric_group_fft.f90} and
+\path{AmpliGluonTrace/tests/test_trace_colour_matrix.f90}.  They compare the
+fast transform with direct representation sums, check Parseval identities,
+and compare the Fourier colour contraction with direct dense convolution on
+small groups.
+
+\section{Conclusion}
+
+The essential chain of reasoning is now short:
+\begin{enumerate}
+  \item A trace or DDM colour decomposition produces a non-diagonal Gram
+        matrix.
+  \item Simultaneous relabelling invariance makes each Gram entry depend only
+        on a relative permutation.
+  \item The Gram matrix is therefore a convolution on $S_{n-1}$ or
+        $S_{n-2}$, specified by one factorial-sized kernel.
+  \item Fourier transformation on the symmetric group separates the
+        convolution into Young-irrep blocks.
+  \item A recursive subgroup algorithm and sparse adjacent swaps make that
+        transform fast enough to be useful.
+  \item The transformed kernel is reused, while every event requires only an
+        amplitude transform and independent block contractions.
+\end{enumerate}
+
+This is precisely how the codes avoid the explicit dense
+$\cA^\dagger G\cA$ multiplication.  They do not change the physics and do
+not discard interference terms.  They expose the permutation symmetry that
+was already present, and use it to evaluate the same colour sum in a far more
+structured representation.
+
+\begin{thebibliography}{99}
+
+\bibitem{clausen1989}
+M.~Clausen,
+``Fast generalized Fourier transforms,''
+\emph{Theoretical Computer Science} \textbf{67} (1989) 55--63,
+\href{https://doi.org/10.1016/0304-3975(89)90021-2}{doi:10.1016/0304-3975(89)90021-2}.
+
+\bibitem{diaconisrockmore1990}
+P.~Diaconis and D.~Rockmore,
+``Efficient computation of the Fourier transform on finite groups,''
+\emph{Journal of the American Mathematical Society} \textbf{3} (1990)
+297--332,
+\href{https://doi.org/10.1090/S0894-0347-1990-1030655-4}{doi:10.1090/S0894-0347-1990-1030655-4}.
+
+\bibitem{clausenbaum1993}
+M.~Clausen and U.~Baum,
+``Fast Fourier transforms for symmetric groups: theory and implementation,''
+\emph{Mathematics of Computation} \textbf{61} (1993) 833--847,
+\href{https://doi.org/10.1090/S0025-5718-1993-1192969-X}{doi:10.1090/S0025-5718-1993-1192969-X}.
+
+\bibitem{maslen1998}
+D.~K.~Maslen,
+``The efficient computation of Fourier transforms on the symmetric group,''
+\emph{Mathematics of Computation} \textbf{67} (1998) 1121--1147,
+\href{https://doi.org/10.1090/S0025-5718-98-00964-8}{doi:10.1090/S0025-5718-98-00964-8}.
+
+\bibitem{Corley:2001zk}
+S.~Corley, A.~Jevicki, and S.~Ramgoolam,
+``Exact correlators of giant gravitons from dual $\mathcal N=4$ SYM theory,''
+\emph{Advances in Theoretical and Mathematical Physics} \textbf{5} (2002)
+809--839,
+\href{https://arxiv.org/abs/hep-th/0111222}{arXiv:hep-th/0111222}.
+
+\bibitem{Brown:2007xh}
+T.~W.~Brown, P.~J.~Heslop, and S.~Ramgoolam,
+``Diagonal multi-matrix correlators and BPS operators in $\mathcal N=4$ SYM,''
+\emph{Journal of High Energy Physics} \textbf{02} (2008) 030,
+\href{https://arxiv.org/abs/0711.0176}{arXiv:0711.0176}.
+
+\bibitem{Ramgoolam:2016ciq}
+S.~Ramgoolam,
+``Permutations and the combinatorics of gauge invariants for general $N$,''
+\href{https://arxiv.org/abs/1605.00843}{arXiv:1605.00843}.
+
+\bibitem{Mattioli:2016gyl}
+P.~Mattioli and S.~Ramgoolam,
+``Gauge invariants and correlators in flavoured quiver gauge theories,''
+\emph{Nuclear Physics B} \textbf{911} (2016) 638--711,
+\href{https://arxiv.org/abs/1603.04369}{arXiv:1603.04369}.
+
+\bibitem{BenGeloun:2017vwn}
+J.~Ben Geloun and S.~Ramgoolam,
+``Tensor models, Kronecker coefficients and permutation centralizer algebras,''
+\emph{Journal of High Energy Physics} \textbf{11} (2017) 092,
+\href{https://arxiv.org/abs/1708.03524}{arXiv:1708.03524}.
+
+\bibitem{Maltoni:2002mq}
+F.~Maltoni, K.~Paul, T.~Stelzer, and S.~Willenbrock,
+``Color-flow decomposition of QCD amplitudes,''
+\emph{Physical Review D} \textbf{67} (2003) 014026,
+\href{https://arxiv.org/abs/hep-ph/0209271}{arXiv:hep-ph/0209271}.
+
+\bibitem{Duhr:2006iq}
+C.~Duhr, S.~Hoche, and F.~Maltoni,
+``Color-dressed recursive relations for multi-parton amplitudes,''
+\emph{Journal of High Energy Physics} \textbf{08} (2006) 062,
+\href{https://arxiv.org/abs/hep-ph/0607057}{arXiv:hep-ph/0607057}.
+
+\bibitem{Keppeler:2012ih}
+S.~Keppeler and M.~Sjodahl,
+``Orthogonal multiplet bases in $SU(N_c)$ color space,''
+\emph{Journal of High Energy Physics} \textbf{09} (2012) 124,
+\href{https://arxiv.org/abs/1207.0609}{arXiv:1207.0609}.
+
+\bibitem{Sjodahl:2014opa}
+M.~Sjodahl,
+``ColorFull: a C++ library for calculations in $SU(N_c)$ color space,''
+\emph{European Physical Journal C} \textbf{75} (2015) 236,
+\href{https://arxiv.org/abs/1412.3967}{arXiv:1412.3967}.
+
+\bibitem{diaconis1989}
+P.~Diaconis,
+``A generalization of spectral analysis with application to ranked data,''
+\emph{Annals of Statistics} \textbf{17} (1989) 949--979,
+\href{https://www.jstor.org/stable/2241705}{JSTOR 2241705}.
+
+\bibitem{kondor2007}
+R.~Kondor, A.~Howard, and T.~Jebara,
+``Multi-object tracking with representations of the symmetric group,''
+in \emph{Proceedings of AISTATS} (2007),
+\href{https://proceedings.mlr.press/v2/kondor07a.html}{PMLR article}.
+
+\bibitem{plumb2015}
+G.~Plumb, B.~Pachauri, R.~Kondor, and V.~Singh,
+``SnFFT: a Julia toolkit for Fourier analysis of functions over permutations,''
+\emph{Journal of Machine Learning Research} \textbf{16} (2015) 3469--3473,
+\href{https://jmlr.org/papers/v16/plumb15a.html}{JMLR article}.
+
+\bibitem{beals1997}
+R.~Beals,
+``Quantum computation of Fourier transforms over symmetric groups,''
+in \emph{Proceedings of the 29th Annual ACM Symposium on Theory of
+Computing} (1997) 48--53,
+\href{https://doi.org/10.1145/258533.258548}{doi:10.1145/258533.258548}.
+
+\bibitem{Dufour:2024nmz}
+G.~Dufour and A.~Buchleitner,
+``Fourier analysis of many-body transition amplitudes and states,''
+\href{https://arxiv.org/abs/2409.15079}{arXiv:2409.15079}.
+
+\end{thebibliography}
+
+\appendix
+
+\section{A compact derivation of the Plancherel formula}
+
+For unitary irreducible representations of a finite group $G$, matrix
+elements satisfy the orthogonality relation
+\begin{equation}
+  \sum_{g\in G}
+  \rho_\lambda(g)_{ij}^*
+  \rho_\mu(g)_{k\ell}
+  =\frac{|G|}{d_\lambda}
+   \delta_{\lambda\mu}\delta_{ik}\delta_{j\ell}.
+  \label{eq:matrix-element-orthogonality}
+\end{equation}
+This implies, for the unnormalized transform of
+Eq.~\eqref{eq:forward-transform},
+\begin{equation}
+  \sum_{g\in G} f(g)^*q(g)
+  =\frac{1}{|G|}
+   \sum_\lambda d_\lambda
+   \Tr\!\left(\widehat f_\lambda^\dagger
+               \widehat q_\lambda\right).
+  \label{eq:plancherel-appendix}
+\end{equation}
+Set $f=\cA$ and let $q=B$ be the convolution defined in
+Eq.~\eqref{eq:convolution}.  The convolution theorem gives
+$\widehat B_\lambda=\widehat A_\lambda K_\lambda$.  Substitution into
+Eq.~\eqref{eq:plancherel-appendix} immediately yields
+Eq.~\eqref{eq:block-quadratic-form}.
+
+The placement of inverses and whether matrices are stored transposed varies
+between Fourier conventions.  The source code fixes one consistent choice:
+function values are in lexicographic image-permutation order, the forward
+transform contains $\rho(g)$ rather than $\rho(g^{-1})$, and the kernel
+acts by the right convolution in Eq.~\eqref{eq:convolution}.  With those
+choices, the block product is $\widehat A_\lambda K_\lambda$.
+
+\section{Glossary}
+
+\begin{description}[leftmargin=3.2cm,style=nextline]
+  \item[Colour order]
+    A permutation specifying the order used in a trace or DDM partial
+    amplitude.
+  \item[Gram matrix]
+    The matrix of pairwise inner products between colour tensors.
+  \item[Kernel]
+    The one-argument function $k(g^{-1}h)$ that determines every Gram
+    entry.
+  \item[Convolution]
+    A sum in which a kernel depends only on the relative group element.
+  \item[Representation]
+    Matrices that reproduce the multiplication law of a group.
+  \item[Irrep]
+    An irreducible representation, meaning an elementary symmetry sector.
+  \item[Young diagram]
+    A partition-shaped label for an irrep of a symmetric group.
+  \item[Fourier block]
+    The matrix coefficient associated with one irrep.
+  \item[Plancherel identity]
+    The equality that converts an inner product of group functions into a
+    weighted sum of inner products of their Fourier blocks.
+  \item[DDM basis]
+    A colour decomposition with two fixed endpoint gluons and a permutation
+    of the gluons between them.
+\end{description}
+
+\end{document}

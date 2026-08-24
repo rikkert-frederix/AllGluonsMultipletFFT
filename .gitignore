@@ -1,0 +1,6 @@
+/docs/
+/MultipletRecursion
+/AmpliCol/
+/Benchmark/build-native/
+__pycache__/
+*.py[cod]

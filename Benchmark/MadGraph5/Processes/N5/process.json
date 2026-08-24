@@ -1,0 +1,9 @@
+{
+  "total_gluons": 5,
+  "process": "g g > g g g",
+  "madgraph_version": "3.6.0",
+  "feynman_diagrams": 25,
+  "generated_matrix_graphs": 45,
+  "colour_flows": 24,
+  "matrix_sha256": "00d1e9e2df7a35bc48def67c71f8fd05dfe64a97fca1020c05b02bca73f77b0d"
+}

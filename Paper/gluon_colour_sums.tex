@@ -1,0 +1,554 @@
+\documentclass[aps,prd,twocolumn,superscriptaddress,nofootinbib]{revtex4-2}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\sisetup{range-phrase=--,range-units=single}
+\setcounter{dbltopnumber}{3}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!45!black,
+  citecolor=green!35!black,
+  urlcolor=blue!55!black
+}
+
+\definecolor{tracedarkblue}{HTML}{005A8D}
+\definecolor{tracelightblue}{HTML}{56B4E9}
+\definecolor{adjointdarkorange}{HTML}{C45100}
+\definecolor{adjointlightorange}{HTML}{E69F00}
+\definecolor{multipletgreen}{HTML}{009E73}
+
+\begin{document}
+
+\title{Exact colour sums for multi-gluon amplitudes:\texorpdfstring{\\}{ }
+direct, multiplet and Fourier methods}
+
+\author{Rikkert Frederix}
+\email{rikkert.frederix@fysik.lu.se}
+\affiliation{Department of Physics, Lund University, Box 118, 221 00 Lund, Sweden}
+\author{Valentin Hirschi}
+\email{hirschi@itp.unibe.ch}
+\affiliation{Institute for Theoretical Physics, University of Bern,
+Sidlerstrasse 5, 3012 Bern, Switzerland}
+\author{Malin Sj\"odahl}
+\email{malin.sjodahl@fysik.lu.se}
+\affiliation{Department of Physics, Lund University, Box 118, 221 00 Lund, Sweden}
+
+\begin{abstract}
+We compare exact $SU(3)$ colour sums for fixed-helicity, tree-level all-gluon
+matrix elements.  In the trace and adjoint decompositions, a direct colour
+contraction couples every pair of partial amplitudes, so its evaluation time
+grows quadratically with the factorially growing number of gluon orderings.  An
+orthonormal multiplet basis removes this final double sum but requires a
+representation-labelled amplitude recursion.  Alternatively, a fast Fourier
+transform (FFT) on the symmetric group retains the trace or adjoint partial
+amplitudes and reorganizes the exact colour sum into smaller contractions
+labelled by Young diagrams.
+We compare CPU time after initialization and maximum memory use for four
+through eleven gluons.  At eleven gluons, one matrix-element evaluation takes
+\SI{19.8}{s} in the multiplet basis, \SI{3.08}{s} with the trace FFT, and
+\SI{0.814}{s} with the adjoint FFT; the direct trace and adjoint calculations
+are estimated to take \SI{2.41e5}{s} and \SI{1.69e3}{s}.  The adjoint FFT is
+the fastest method from six through eleven gluons.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:intro}
+
+Colour-ordered Berends--Giele recursion efficiently computes tree-level gluon
+partial amplitudes~\cite{Berends:1987me}.  Computing an exact colour-summed
+squared matrix element also requires evaluating all interference terms among
+the associated colour structures.
+At fixed external momenta and helicities, let $\mathcal M$ denote the full
+amplitude.  The index $\alpha$ labels the chosen colour tensors $C_\alpha$,
+and $A_\alpha$ is the corresponding complex kinematic
+coefficient:
+\begin{equation}
+  \mathcal M=\sum_{\alpha} C_{\alpha}\,A_{\alpha}.
+  \label{eq:colour-decomposition}
+\end{equation}
+The sum over all external colours is then
+\begin{equation}
+  \begin{aligned}
+    \mathcal B
+    &\equiv\sum_{\text{colours}}|\mathcal M|^2
+    =\sum_{\alpha,\beta}A_{\alpha}^{*}G_{\alpha\beta}A_{\beta},\\
+    G_{\alpha\beta}
+    &\equiv\sum_{\text{colours}}C_{\alpha}^{*}C_{\beta}.
+  \end{aligned}
+  \label{eq:colour-sum}
+\end{equation}
+The star denotes complex conjugation, the vertical bars denote the complex
+modulus, and $\alpha$ and $\beta$ both label the colour tensors in
+Eq.~\eqref{eq:colour-decomposition}.  The quantity $\mathcal B$ is the
+colour-summed squared matrix element, while $G$ is the colour-overlap matrix
+with entries $G_{\alpha\beta}$.  The structure of $G$, and hence the
+work required to evaluate Eq.~\eqref{eq:colour-sum}, depends on the chosen
+colour decomposition.
+
+The trace decomposition~\cite{Paton:1969je,Mangano:1987xk} and the adjoint
+basis of Del Duca, Dixon and Maltoni~\cite{DelDuca:1999rs} express the
+amplitude in terms of familiar colour-ordered partial amplitudes.  Their
+colour tensors are not orthogonal, so the off-diagonal terms in
+Eq.~\eqref{eq:colour-sum} must be retained.  In both cases, the number of
+orderings grows factorially with the gluon multiplicity, making direct
+evaluation of the double sum increasingly expensive.
+
+Multiplet bases offer a different organization of colour
+space~\cite{Keppeler:2012ih,Sjodahl:2018cca}.  They are constructed by coupling
+gluons through irreducible $SU(3)$ representations, and their colour tensors
+can be chosen orthonormal.  The final colour sum then reduces to a sum of
+absolute squares.  This simplification requires the recursion to track
+representation labels and recouple the corresponding colour states when
+gluons are reordered.  Here we present the first numerical implementation of
+the off-shell multiplet recursion
+developed in Ref.~\cite{Bolinder:2025gbj}.  We also use this recursion for the
+first time to evaluate fully colour-summed squared matrix elements at fixed
+momenta and helicities.
+
+The non-orthogonal trace and adjoint decompositions nevertheless have useful
+structure.  In either case, the overlap between two colour tensors depends
+only on the relative permutation of their gluon orderings.  A fast Fourier
+transform (FFT) on the symmetric group exploits this property to replace the
+direct double sum with a set of smaller, independent matrix contractions.
+The Fourier method is exact: it retains every colour interference term and
+does not change the partial amplitudes.  To our knowledge, this is the first
+application of a symmetric-group FFT to exact colour summation for QCD matrix
+elements.
+
+We examine these three approaches in turn.  Section~\ref{sec:direct}
+describes direct colour summation in the trace and adjoint decompositions.
+Section~\ref{sec:multiplet} presents the orthogonal multiplet basis and its
+recursion.  Section~\ref{sec:fft} explains the symmetric-group Fourier method
+for the trace and adjoint colour sums.  Section~\ref{sec:results} compares
+their CPU times per evaluation after initialization and their maximum memory
+use.  Throughout, $N$ denotes the total number of external gluons.
+
+\section{Direct colour sums in trace and adjoint decompositions}
+\label{sec:direct}
+
+\subsection{Trace decomposition}
+
+Cyclic invariance lets us fix one external gluon in the single-trace
+decomposition.  For any positive integer $q$, $S_q$ denotes the group of
+permutations of $q$ labels; $\sigma\in S_q$ is one such permutation, and
+$\sigma(i)$ is the image of label $i$.  Permuting the remaining $N-1$ gluons
+gives
+\begin{equation}
+  \mathcal M
+  =\sum_{\sigma\in S_{N-1}}
+   C^{\mathrm{tr}}_{\sigma}
+   A\bigl(\sigma(1),\ldots,\sigma(N-1),N\bigr),
+  \label{eq:trace-decomposition}
+\end{equation}
+with
+\begin{equation}
+  P_{\mathrm{tr}}=(N-1)!
+  \label{eq:trace-size}
+\end{equation}
+partial amplitudes, where $!$ denotes factorial.  Here
+$C^{\mathrm{tr}}_\sigma$ is the trace colour tensor for order $\sigma$,
+$A(\sigma(1),\ldots,\sigma(N-1),N)$ is the corresponding partial amplitude,
+and $P_{\mathrm{tr}}$ is the number of trace orders.  The trace set is
+overcomplete but convenient because its kinematic coefficients are the usual
+colour-ordered amplitudes.  Reflection relates each ordering to its reverse,
+so the corresponding currents can be shared when evaluating partial
+amplitudes.
+
+\subsection{Adjoint basis}
+
+The adjoint decomposition places gluons $1$ and $N$ at the ends of a chain of
+structure constants and permutes the remaining gluons~\cite{DelDuca:1999rs}:
+\begin{equation}
+  \mathcal M
+  =\sum_{\sigma\in S_{N-2}}
+   C^{\mathrm{adj}}_{\sigma}
+   A\bigl(1,\sigma(2),\ldots,\sigma(N-1),N\bigr).
+  \label{eq:adjoint-decomposition}
+\end{equation}
+There are
+\begin{equation}
+  P_{\mathrm{adj}}=(N-2)!
+  \label{eq:adjoint-size}
+\end{equation}
+partial amplitudes.  Here $C^{\mathrm{adj}}_\sigma$ is the chain of structure
+constants for order $\sigma$,
+$A(1,\sigma(2),\ldots,\sigma(N-1),N)$ is the corresponding partial amplitude,
+and $P_{\mathrm{adj}}$ is the number of adjoint orders.  The adjoint set is
+smaller than the trace set, but its colour tensors remain non-orthogonal.
+
+\subsection{Direct contraction}
+
+For either decomposition, let $P$ denote $P_{\mathrm{tr}}$ or
+$P_{\mathrm{adj}}$, as appropriate.  For trace, let $\sigma$, $\tau$, and
+$\pi$ belong to $S_{N-1}$; for adjoint, let them belong to $S_{N-2}$, which
+here permutes labels $2,\ldots,N-1$.  Direct evaluation of
+Eq.~\eqref{eq:colour-sum} contracts one pair of orders at a time.  Because the
+colour matrix is real and symmetric, we evaluate each diagonal term once,
+while each off-diagonal pair contributes twice the real part of its
+upper-triangular term.  A common relabelling of both colour tensors leaves
+their overlap unchanged, so
+\begin{equation}
+  G_{\sigma\tau}=k(\sigma^{-1}\tau),
+  \qquad k(\pi)=k(\pi^{-1}).
+  \label{eq:relative-permutation}
+\end{equation}
+Here $G_{\sigma\tau}$ is the overlap of the colour tensors for the two orders,
+the superscript $-1$ denotes permutation inversion, and $k(\pi)$ is the
+overlap obtained by placing the first tensor in the reference order and using
+$\pi$ as the relative permutation.  Only the $P$ values of $k$ need to be
+stored because every row of $G$ is a permutation of this list.  The
+contraction still considers $P^2$ pairs, so its time scales as $[(N-1)!]^2$
+for trace and $[(N-2)!]^2$ for adjoint.  These direct contractions provide the
+baseline for the comparison below.
+
+For both decompositions, we use Berends--Giele
+recursion~\cite{Berends:1987me} to evaluate the ordered amplitudes.  We compute
+currents shared by several complete orders once and reuse them.  Our comparison
+therefore includes both partial-amplitude evaluation and final colour
+contraction, rather than the contraction alone.
+
+\section{The multiplet basis}
+\label{sec:multiplet}
+
+Each gluon transforms in the adjoint representation of $SU(3)$.  To construct
+a multiplet basis, we couple the first two gluons to an irreducible
+representation and then couple each remaining gluon in turn until the total
+representation is a singlet.  Each basis vector is labelled by the resulting
+representation sequence and an extra label whenever a representation occurs
+more than once.  With a suitable normalization, the colour tensors obey
+\begin{equation}
+  \sum_{\text{colours}}
+  C_{\alpha}^{*}C_{\beta}=\delta_{\alpha\beta}.
+  \label{eq:multiplet-orthogonality}
+\end{equation}
+Here $\alpha$ and $\beta$ label basis vectors, including any extra labels for
+repeated representations, and $\delta_{\alpha\beta}$ is the Kronecker delta.
+Equation~\eqref{eq:colour-sum} therefore becomes
+\begin{equation}
+  \mathcal B=\sum_{\alpha}|A_{\alpha}|^2.
+  \label{eq:multiplet-sum}
+\end{equation}
+Thus, once the amplitude coefficients $A_\alpha$ are known, exact colour
+summation reduces to an ordinary sum of absolute squares.
+
+We compute the amplitude coefficients in this basis using the off-shell
+recursion of Ref.~\cite{Bolinder:2025gbj}.  A current is labelled by a subset
+of external gluons and by an allowed sequence of $SU(3)$ representations.
+Joining two currents requires reordering their gluons into the order defining
+the parent basis.  We decompose this reordering into exchanges of neighbouring
+gluons.  Each exchange acts on the representation sequences through a
+normalized matrix of Wigner $6j$ coefficients~\cite{Sjodahl:2015qoa}.
+
+These coefficients depend on the normalization, phase, and multiplicity
+conventions chosen for the three-point $SU(3)$ vertices.  We calculate these
+coefficients in the multiplet-basis conventions and tabulate the resulting
+normalized exchange matrices.  We validate the complete table in four ways: by
+direct contractions of explicit adjoint tensors, by contractions after
+resolving each adjoint into a traceless fundamental--antifundamental pair, and
+by recursive reduction to the elementary two-line recouplings described in
+Refs.~\cite{Alcock-Zeilinger:2022hrk,Keppeler:2023msu}, and by a
+carrier-space-free construction using analytic fusion labels, dimensions,
+Casimirs, and Young-seminormal swaps.  Direct symmetric-group projector
+calculations provide a further independent check of the seed and representative
+multiplicity-free and repeated-channel blocks.  The resulting
+tabulation contains 354 exchange blocks with 5673 nonzero entries and covers
+every recoupling required at the multiplicities considered.  Because the
+coefficients and exchange sequences depend only on $N$, we prepare them once
+before evaluating phase-space points.
+
+The representations allowed in repeated adjoint products determine the
+number of multiplet coefficients.  For $N=4,\ldots,11$, the respective counts
+are $8$, $32$, $145$, $702$, $3598$, $19280$, $107160$, and $614000$.
+The multiplet basis is smaller than the trace set from $N=7$ onward but larger
+than the adjoint basis throughout this range.
+Orthogonality eliminates the final double sum, whereas the
+representation-labelled recursion requires more work than the ordered trace
+and adjoint recursions.  The timings below show whether eliminating the double
+sum offsets this additional work.
+
+\section{Symmetric-group FFT for trace and adjoint colour sums}
+\label{sec:fft}
+
+For either decomposition, let $P=m!$, where $m=N-1$ for trace and $m=N-2$
+for adjoint.  The partial amplitudes define a function $A(\sigma)$ on the
+permutation group $S_m$.  By Eq.~\eqref{eq:relative-permutation}, each colour
+overlap depends only on the relative permutation.  The colour sum is therefore
+a convolution on $S_m$.  Specifically, for each $\tau\in S_m$, the
+convolution sums $A(\sigma)k(\sigma^{-1}\tau)$ over $\sigma\in S_m$; the
+colour sum then contracts the result with $A(\tau)^*$ and sums over $\tau$.
+
+On a cyclic group, a Fourier transform converts convolution into scalar
+multiplication.  Because permutations do not generally commute, the
+corresponding transform on $S_m$ instead produces matrices.  Its blocks are
+labelled by partitions $\lambda$ of $m$, or equivalently by Young diagrams
+with $m$ boxes.  We write $\lambda\vdash m$ for such a partition.  If
+$d_\lambda$ is the dimension of the
+irreducible representation labelled by $\lambda$, then
+\begin{equation}
+  \sum_{\lambda\vdash m}d_\lambda^2=m!.
+  \label{eq:young-counting}
+\end{equation}
+Thus the $m!$ amplitude values are reorganized exactly into one
+$d_\lambda\times d_\lambda$ matrix for each Young diagram.
+
+For a complex-valued function $f$ on $S_m$, define its transformed matrix
+$\widehat f_\lambda$ by
+\begin{equation}
+  \widehat f_\lambda
+  =\sum_{\sigma\in S_m}f(\sigma)\rho_\lambda(\sigma),
+  \label{eq:group-transform}
+\end{equation}
+where $\rho_\lambda(\sigma)$ is the real orthogonal
+$d_\lambda\times d_\lambda$ matrix representing the permutation $\sigma$ in
+the irreducible representation labelled by $\lambda$.  Let
+$\widehat A_\lambda$ be the transform of the partial-amplitude function
+$A(\sigma)$, and let $K_\lambda$ be the transform of the colour-overlap
+function $k(\sigma)$.  The exact colour sum is
+\begin{equation}
+  \mathcal B=\frac{1}{m!}
+  \sum_{\lambda\vdash m}d_\lambda
+  \operatorname{Tr}\!\left(
+    \widehat A_\lambda^\dagger
+    \widehat A_\lambda K_\lambda
+  \right).
+  \label{eq:fft-colour-sum}
+\end{equation}
+The dagger denotes Hermitian conjugation.
+Equation~\eqref{eq:fft-colour-sum} couples only matrices associated with the
+same Young diagram, rather than all pairs of permutations.
+
+Computing every transformed matrix entry directly from
+Eq.~\eqref{eq:group-transform} would still be expensive.  Fast transforms on
+finite groups instead reuse partial results~\cite{DiaconisRockmore1990}.  For
+the symmetric group, we evaluate the transform recursively along the subgroup
+chain
+\begin{equation}
+  S_1\subset S_2\subset\cdots\subset S_m,
+  \label{eq:subgroup-chain}
+\end{equation}
+where $S_i$ is the permutation group on $i$ labels for $i=1,\ldots,m$.  For
+$i=1,\ldots,m-1$, the inclusion $S_i\subset S_{i+1}$ leaves label $i+1$
+unchanged.  Partial results at one level are reused at the next.  Along this
+chain, the matrices representing exchanges of adjacent gluons split into
+one- and two-dimensional blocks, reducing the work at each
+step~\cite{ClausenBaum1993,Maslen1998}.
+
+For each $N$, we calculate the $K_\lambda$ matrices once and reuse them.
+Collectively, these matrices contain
+$P=\sum_{\lambda\vdash m}d_\lambda^2$ colour entries.  At each new phase-space
+point and helicity assignment, we transform the partial amplitudes and
+evaluate the contractions in Eq.~\eqref{eq:fft-colour-sum}.  The transform
+does not make either set of colour tensors orthogonal or reduce the number of
+partial amplitudes; it reorganizes the exact colour sum to avoid contracting
+$P^2$ pairs directly.
+
+In our trace calculation, we obtain the colour overlaps by closing fundamental
+colour lines in $U(3)$.  Although individual $U(3)$ overlaps need not equal
+their $SU(3)$ counterparts, the $U(1)$ component decouples from a tree-level
+pure-gluon amplitude.  Contracting these $U(3)$ overlaps with the physical
+partial amplitudes therefore gives the same final $SU(3)$ colour sum.  For the
+adjoint decomposition, we write the chains of structure constants as nested
+commutators.  Their $U(1)$ components vanish because the identity generator
+commutes with every generator.  The trace and adjoint cases use different
+values of $m$ and different overlap functions $k$, but the same
+symmetric-group transform.
+
+\section{Numerical comparison}
+\label{sec:results}
+
+\input{tables/evaluation_results.tex}
+
+\subsection{Setup and checks}
+
+We study $gg\to(N-2)g$, summing the colours of all incoming and outgoing
+gluons while holding their helicities fixed.
+
+For each $N=4,\ldots,11$, we apply all five methods to the same phase-space
+point and the same helicity assignment, chosen to give a nonzero matrix
+element.  We use the general Berends--Giele recursion in every case, even when
+an analytic expression is available, so special-case formulas do not affect
+the comparison.  At fixed $N$, the recursion performs the same operations for
+every helicity assignment not excluded by the tree-level selection rule.
+
+We compiled the five implementations with GNU Fortran 13.3 at optimization
+level \texttt{-O3} and ran each on a single core of an Intel Core i7-8700K.
+Timing excludes initialization and the first evaluation, during which any
+remaining $N$-dependent data are prepared.  The reported CPU time per
+subsequent matrix-element evaluation is the median of ten measurements.
+
+For each method, we measured maximum physical memory in a separate process;
+the values include initialization and all evaluations.
+
+For every tested configuration, all completed calculations agree on the
+colour-summed squared matrix element.  The largest pairwise relative
+difference between nonzero results is $8.1\times10^{-12}$, at ten gluons.  For
+helicity configurations forbidden by the tree-level selection rule, all five
+methods return exactly zero.  Extrapolated times are excluded from these
+checks.
+
+\subsection{Evaluation time after initialization}
+
+Table~\ref{tab:evaluation-times} and Fig.~\ref{fig:evaluation-times} summarize
+the timing results.  Direct adjoint contraction is fastest at four and five
+gluons; adjoint with the Fourier transform is fastest from six through eleven
+gluons.  The direct double sum becomes costly by eight gluons: direct trace
+takes \SI{0.381}{s}, whereas trace with the transform takes \SI{1.62}{ms}.
+At nine gluons, the corresponding times are \SI{29.7}{s} and \SI{15.5}{ms},
+a factor of about $1900$.
+
+The multiplet method avoids the direct double sum.  It is faster than direct
+trace at six gluons and faster than direct adjoint at nine gluons.  At eleven
+gluons, the multiplet evaluation takes \SI{19.8}{s}, versus an estimated
+\SI{1.69e3}{s} for direct adjoint and measured times of \SI{3.08}{s} and
+\SI{0.814}{s} for trace and adjoint with the transform, respectively.  The
+adjoint Fourier method is therefore fastest at this multiplicity.
+
+\begin{figure}[t]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=0.97\columnwidth,
+      height=0.70\columnwidth,
+      xlabel={number of external gluons $N$},
+      ylabel={CPU time per evaluation [s]},
+      xmin=3.7,xmax=11.3,
+      xtick={4,5,6,7,8,9,10,11},
+      ymode=log,
+      ymin=1e-7,ymax=1e6,
+      ymajorgrids=true,
+      grid style={draw=black!12,line width=0.35pt},
+      axis line style={draw=black!65,line width=0.5pt},
+      tick align=outside,
+      legend style={at={(0.02,0.98)},anchor=north west,
+                    draw=black!18,fill=white,fill opacity=0.94,
+                    text opacity=1,font=\scriptsize,rounded corners=1pt,
+                    legend columns=2,
+                    /tikz/every even column/.append style={column sep=7pt}},
+      tick label style={font=\scriptsize},
+      label style={font=\small},
+      unbounded coords=jump,
+    ]
+      \addplot+[mark=square*,mark size=2.3pt,thick,densely dashed,tracedarkblue,
+                mark options={solid,fill=tracedarkblue,draw=tracedarkblue}]
+        table[x=N,y=trace_direct] {data/colour_sum_times.dat};
+      \addlegendentry{trace, direct}
+      \addplot+[mark=diamond*,mark size=2.5pt,thick,tracelightblue,
+                mark options={solid,fill=tracelightblue,draw=tracelightblue}]
+        table[x=N,y=trace_fft] {data/colour_sum_times.dat};
+      \addlegendentry{trace, FFT}
+      \addplot+[mark=triangle*,mark size=2.6pt,thick,densely dashed,adjointdarkorange,
+                mark options={solid,fill=adjointdarkorange,draw=adjointdarkorange}]
+        table[x=N,y=adjoint_direct] {data/colour_sum_times.dat};
+      \addlegendentry{adjoint, direct}
+      \addplot+[mark=pentagon*,mark size=2.4pt,thick,adjointlightorange,
+                mark options={solid,fill=adjointlightorange,draw=adjointlightorange}]
+        table[x=N,y=adjoint_fft] {data/colour_sum_times.dat};
+      \addlegendentry{adjoint, FFT}
+      \addplot+[mark=*,mark size=2.2pt,thick,multipletgreen,
+                mark options={solid,fill=multipletgreen,draw=multipletgreen}]
+        table[x=N,y=multiplet] {data/colour_sum_times.dat};
+      \addlegendentry{multiplet}
+      \addplot+[no marks,thick,densely dotted,tracedarkblue,forget plot]
+        table[x=N,y=trace_extension] {data/colour_sum_times.dat};
+      \addplot+[no marks,thick,densely dotted,adjointdarkorange,forget plot]
+        table[x=N,y=adjoint_extension] {data/colour_sum_times.dat};
+      \addplot+[only marks,mark=square,mark size=2.7pt,
+                mark options={fill=white,draw=tracedarkblue,line width=0.8pt},forget plot]
+        table[x=N,y=trace_estimate] {data/colour_sum_times.dat};
+      \addplot+[only marks,mark=triangle,mark size=3.0pt,
+                mark options={fill=white,draw=adjointdarkorange,line width=0.8pt},forget plot]
+        table[x=N,y=adjoint_estimate] {data/colour_sum_times.dat};
+    \end{axis}
+  \end{tikzpicture}
+  \caption{CPU time to evaluate one fixed-helicity, colour-summed squared
+  matrix element after initialization.  Dashed lines show direct trace and
+  adjoint colour sums; solid blue and orange lines show their exact Fourier
+  counterparts; the solid green line shows the multiplet method.  Dotted
+  extensions and open symbols indicate the three estimates identified by
+  asterisks in Table~\ref{tab:evaluation-times}, while filled symbols indicate
+  measurements.}
+  \label{fig:evaluation-times}
+\end{figure}
+
+\subsection{Memory use}
+
+The following table gives maximum memory use at the four largest
+multiplicities.  A dash indicates that the corresponding run did not finish;
+no memory value is estimated.
+\input{tables/memory_results.tex}
+
+At every multiplicity with a direct result, the direct and Fourier variants
+use similar amounts of memory.  At nine gluons, direct trace uses
+\SI{14.0}{MiB} and trace with the transform uses
+\SI{14.8}{MiB}; the adjoint values are \SI{7.66}{MiB} and \SI{7.86}{MiB}.
+Our direct implementations store only the $P$ distinct overlaps from
+Eq.~\eqref{eq:relative-permutation}, not the full $P\times P$ matrix.  Within
+each decomposition, the direct and Fourier methods therefore differ far more
+in evaluation time than in stored colour data.
+
+At eleven gluons, memory use is \SI{3.96}{GiB} for the multiplet method,
+\SI{1.09}{GiB} for trace with the transform, and \SI{398}{MiB} for adjoint
+with the transform.  For each of the three methods with results at both
+multiplicities, memory use grows by about an order of magnitude from ten to
+eleven gluons, suggesting that memory may become an important limitation
+beyond the range studied here.
+
+\section{Conclusions}
+\label{sec:conclusion}
+
+We have compared three exact approaches to evaluating fixed-helicity,
+colour-summed squared matrix elements for tree-level all-gluon scattering.
+Although our direct trace and adjoint implementations each store only one row
+of colour overlaps, both contractions couple every pair of partial amplitudes
+and therefore scale quadratically with the factorially growing number of
+amplitudes.
+
+The multiplet-basis calculation reduces the final colour sum to a sum of
+absolute squares and substantially outperforms the direct contractions at
+high multiplicity, but the symmetric-group Fourier method is faster still.
+It retains the trace or adjoint partial amplitudes while exploiting the
+relative-permutation dependence of their colour overlaps to replace the
+direct double sum with exact contractions labelled by Young diagrams.
+
+At eleven gluons, the CPU times per evaluation after initialization are
+\SI{3.08}{s} for trace with the transform and \SI{0.814}{s} for adjoint with
+the transform, compared with \SI{19.8}{s} in the multiplet basis.  Both
+Fourier methods also use less memory at this multiplicity, despite the
+multiplet basis's simpler final colour sum.  The direct trace and adjoint
+contractions are estimated to require \SI{2.41e5}{s} and \SI{1.69e3}{s},
+respectively.  The adjoint Fourier method uses the smaller $(N-2)!$ set
+of partial amplitudes; it is fastest from six through eleven gluons and has
+the smallest recorded memory use at eleven gluons.
+
+Processes with external quarks are a natural next application.  The
+pure-gluon adjoint chain cannot be carried over unchanged because quarks and
+antiquarks carry fundamental and antifundamental colour.  For one
+quark--antiquark pair, the corresponding colour decomposition uses an open
+chain of fundamental generators, with the gluons permuted between the quark
+and antiquark.  For several pairs, the established generalization also tracks
+the placement and nesting of the quark
+lines~\cite{Johansson:2015oia,Melia:2015ika}.  Multiplet bases can accommodate
+external quarks, antiquarks, and gluons while remaining orthogonal, but
+extending the recursion requires representation paths and recoupling
+coefficients involving fundamental
+lines~\cite{Sjodahl:2018cca,Alcock-Zeilinger:2022hrk,Keppeler:2023msu}.  For
+one pair, the open-chain colour overlaps again depend only on the relative
+gluon ordering, so the same symmetric-group transform applies once the
+required open-chain overlaps have been computed.  With several pairs, one
+could apply the transform to gluon permutations within each quark-line
+arrangement, but different arrangements remain coupled; whether such partial
+transforms reduce the total cost remains to be determined.
+
+\bibliographystyle{apsrev4-2}
+\bibliography{references}
+
+\end{document}

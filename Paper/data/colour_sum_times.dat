@@ -1,0 +1,13 @@
+# Values transcribed from Paper/results.md.
+# Times are seconds.  Direct columns contain measurements only.
+# Extension columns join the last measurement to the estimated points;
+# estimate columns contain only the extrapolated values.
+N trace_direct adjoint_direct multiplet trace_fft adjoint_fft trace_extension adjoint_extension trace_estimate adjoint_estimate
+4  7.29e-7 5.43e-7 9.23e-7 9.68e-7 6.45e-7 nan       nan       nan       nan
+5  6.23e-6 2.44e-6 6.38e-6 4.41e-6 2.62e-6 nan       nan       nan       nan
+6  1.38e-4 1.53e-5 6.23e-5 2.62e-5 1.33e-5 nan       nan       nan       nan
+7  6.16e-3 1.96e-4 7.18e-4 1.86e-4 8.32e-5 nan       nan       nan       nan
+8  3.81e-1 5.78e-3 8.26e-3 1.62e-3 6.20e-4 nan       nan       nan       nan
+9  2.97e1  3.03e-1 1.04e-1 1.55e-2 5.23e-3 2.97e1    nan       nan       nan
+10 nan      2.09e1  1.49e0  2.15e-1 5.89e-2 2.4057e3 2.09e1    2.4057e3 nan
+11 nan      nan      1.98e1  3.08e0  8.14e-1 2.4057e5 1.6929e3 2.4057e5 1.6929e3

@@ -1,0 +1,12 @@
+{
+  "description": "Full-colour fixed-helicity matrix elements from the native DDM DefaultBG backend at g_s=1",
+  "4": {
+    "c43bc4fd882517442025aaef2432618744cfd0cf005813596a8aa3f13f21c41d": 1.3396260571622168e4
+  },
+  "5": {
+    "45891c0b556ef87ad995bb12e5bf7adb91e2290f9fbc297dda99f0bc2530b94a": 2.7002623570095043e1
+  },
+  "6": {
+    "411e7a6e37e4db895338834b748c98cfb9f53905d586a282db7b74d7a4cbb024": 4.3986672046400317e-3
+  }
+}

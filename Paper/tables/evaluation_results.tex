@@ -1,0 +1,38 @@
+\begin{table*}[t]
+  \caption{CPU time for one evaluation of a fixed-helicity, colour-summed
+  squared matrix element after initialization.  Initialization and the first
+  evaluation are excluded.  Direct denotes colour-overlap-matrix contraction
+  without a Fourier transform, in either the trace decomposition or the
+  adjoint basis.  FFT denotes the exact symmetric-group Fourier method.
+  Asterisks mark estimates, not measurements.}
+  \label{tab:evaluation-times}
+  \centering
+  \setlength{\tabcolsep}{5.5pt}
+  \begin{tabular}{@{}c rr r rr@{}}
+  \toprule
+  $N$ & \multicolumn{2}{c}{direct colour sum} &
+  \multicolumn{1}{c}{orthogonal basis} &
+  \multicolumn{2}{c}{Fourier colour sum} \\
+  \cmidrule(lr){2-3}\cmidrule(lr){4-4}\cmidrule(lr){5-6}
+  & trace & adjoint & multiplet & trace FFT & adjoint FFT \\
+  \midrule
+  4  & \SI{0.729}{\micro\second} & \SI{0.543}{\micro\second} & \SI{0.923}{\micro\second} & \SI{0.968}{\micro\second} & \SI{0.645}{\micro\second} \\
+  5  & \SI{6.23}{\micro\second}  & \SI{2.44}{\micro\second}  & \SI{6.38}{\micro\second}  & \SI{4.41}{\micro\second}  & \SI{2.62}{\micro\second} \\
+  6  & \SI{138}{\micro\second}   & \SI{15.3}{\micro\second}  & \SI{62.3}{\micro\second}  & \SI{26.2}{\micro\second}  & \SI{13.3}{\micro\second} \\
+  7  & \SI{6.16}{\milli\second}  & \SI{0.196}{\milli\second} & \SI{0.718}{\milli\second} & \SI{0.186}{\milli\second} & \SI{0.0832}{\milli\second} \\
+  8  & \SI{0.381}{\second}       & \SI{5.78}{\milli\second}  & \SI{8.26}{\milli\second}  & \SI{1.62}{\milli\second}  & \SI{0.620}{\milli\second} \\
+  9  & \SI{29.7}{\second}        & \SI{0.303}{\second}       & \SI{0.104}{\second}       & \SI{0.0155}{\second}      & \SI{0.00523}{\second} \\
+  10 & \SI{2.41e3}{\second}\textsuperscript{*} & \SI{20.9}{\second} & \SI{1.49}{\second} & \SI{0.215}{\second} & \SI{0.0589}{\second} \\
+  11 & \SI{2.41e5}{\second}\textsuperscript{*} & \SI{1.69e3}{\second}\textsuperscript{*} & \SI{19.8}{\second} & \SI{3.08}{\second} & \SI{0.814}{\second} \\
+  \bottomrule
+  \end{tabular}
+
+  \vspace{0.5ex}
+  \begin{minipage}{0.97\textwidth}
+  \footnotesize
+  \textsuperscript{*}Estimated from the last measured direct result, assuming
+  that the time is proportional to the square of the number of
+  colour orders, with $P_{\mathrm{tr}}=(N-1)!$ and
+  $P_{\mathrm{adj}}=(N-2)!$.
+  \end{minipage}
+\end{table*}
